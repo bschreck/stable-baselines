@@ -11,6 +11,7 @@ Pre-Release 2.5.1a0 (WIP)
 - doc update (fix example of result plotter + improve doc)
 - fixed logger issues when stdout lacks ``read`` function
 - fixed a bug in ``common.dataset.Dataset`` where shuffling was not disabled properly (it affects only PPO1 with recurrent policies)
+- fixed output layer name for DDPG q function, used in pop-art normalization and l2 regularization of the critic
 
 
 Release 2.5.0 (2019-03-28)
