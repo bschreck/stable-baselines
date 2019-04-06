@@ -10,6 +10,7 @@ Pre-Release 2.5.1a0 (WIP)
 
 - doc update (fix example of result plotter + improve doc)
 - fixed logger issues when stdout lacks ``read`` function
+- fixed a bug in ``common.dataset.Dataset`` where shuffling was not disabled properly (it affects only PPO1 with recurrent policies)
 
 
 Release 2.5.0 (2019-03-28)
