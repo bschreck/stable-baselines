@@ -90,6 +90,7 @@ class Monitor(Wrapper):
             ep_info = {"r": round(ep_rew, 6), "l": eplen, "t": round(time.time() - self.t_start, 6)}
             for key in self.info_keywords:
                 ep_info[key] = info[key]
+                print(ep_info[key], type(ep_info[key]))
             self.episode_rewards.append(ep_rew)
             self.episode_lengths.append(eplen)
             self.episode_times.append(time.time() - self.t_start)

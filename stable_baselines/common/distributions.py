@@ -212,6 +212,42 @@ class MultiCategoricalProbabilityDistributionType(ProbabilityDistributionType):
         return tf.int32
 
 
+class MultiMixedProbabilityDistributionType(ProbabilityDistributionType):
+    def __init__(self, categorical_n_vec, gaussian_size):
+        """
+        The probability distribution type for multiple categorical and gaussian inputs
+
+        :param categorical_n_vec: ([int]) the vectors for categorical inputs
+        :param gaussian_size: (int) the number of dimensions of the multivariate gaussian
+        """
+        self.multi_cat = MultiCategoricalProbabilityDistributionType(categorical_n_vec)
+        self.gaussian = DiagGaussianProbabilityDistributionType(gaussian_size)
+
+    def probability_distribution_class(self):
+        return MultiMixedProbabilityDistribution
+
+    def proba_distribution_from_flat(self, flat):
+        return MultiMixedProbabilityDistribution(self.n_vec, self.gaussian_size, flat)
+
+    def proba_distribution_from_latent(self, pi_latent_vector, vf_latent_vector, init_scale=1.0, init_bias=0.0):
+        prob_a_dist_cat, pdparam_cat, q_values_cat = self.multi_cat.proba_distribution_from_latent(
+            pi_latent_vector, vf_latent_vector, init_scale=init_scale, init_bias=init_bias)
+        prob_a_dist_gauss, pdparam_gauss, q_values_gauss = self.gaussian.proba_distribution_from_latent(
+            pi_latent_vector, vf_latent_vector, init_scale=init_scale, init_bias=init_bias)
+        return (tf.concat([prob_a_dist_cat, prob_a_dist_gauss]),
+                tf.concat([pdparam_cat, pdparam_gauss]),
+                tf.concat([q_values_cat, q_values_gauss]))
+
+
+    def param_shape(self):
+        return [self.multi_cat.param_shape()[0] + self.gaussian.param_shape()[0]]
+
+    def sample_shape(self):
+        return [self.multi_cat.sample_shape()[0] + self.gaussian.sample_shape()[0]]
+
+    def sample_dtype(self):
+        return tf.float32
+
 class DiagGaussianProbabilityDistributionType(ProbabilityDistributionType):
     def __init__(self, size):
         """
@@ -374,6 +410,69 @@ class MultiCategoricalProbabilityDistribution(ProbabilityDistribution):
         raise NotImplementedError
 
 
+class MultiMixedProbabilityDistribution(ProbabilityDistribution):
+    def __init__(self, nvec, flat):
+        """
+        Probability distributions from mixed multicategorical gaussian inputs
+
+        :param categorical_nvec: ([int]) the sizes of the different categorical inputs
+        :param flat: ([float]) part categorical logits input, part multivariate gaussian input data
+        """
+        self.cat_begin = [0 for _ in flat.get_shape()]
+        self.cat_size = flat.get_shape()
+        self.cat_size[-1] = sum(nvec)
+        self.gauss_begin = cat_size
+        self.gauss_end = [-1 for _ in flat.get_shape()]
+
+        self.categoricals = MultiCategoricalProbabilityDistribution(nvec, self._get_cat_part(flat))
+        self.gaussian = DiagGaussianProbabilityDistribution(self._get_gauss_part(flat))
+        self.flat = flat
+
+    def _get_cat_part(self, _input):
+        return tf.slice(_input, self.cat_begin, self.cat_size)
+
+    def _get_gauss_part(self, _input):
+        return tf.slice(_input, self.gauss_begin, self.gauss_end)
+
+    def flatparam(self):
+        return self.flat
+
+    def mode(self):
+        cat_mode = tf.cast(self.categoricals.mode(), tf.float32)
+        gauss_mode = self.gaussian.mode()
+        return tf.stack([cat_mode, gauss_mode], axis=-1)
+
+    def neglogp(self, x):
+        cat_x = self._get_cat_part(x)
+        gauss_x = self._get_gauss_part(x)
+        return tf.add_n([self.categoricals.neglogp(cat_x), self.gaussian.neglogp(gauss_x)])
+
+    def kl(self, other):
+        cat_kl = self.categoricals.kl(other.categoricals)
+        gauss_kl = self.gaussian.kl(other.gaussian)
+        return tf.add_n([cat_kl, gauss_kl])
+
+    def entropy(self):
+        cat_entropy = self.categoricals.entropy()
+        gauss_entropy = self.gaussian.entropy()
+        return tf.add_n([cat_entropy, gauss_entropy])
+
+    def sample(self):
+        cat_sample = tf.cast(self.categoricals.sample(), tf.float32)
+        gauss_sample = self.gaussian.sample()
+        return tf.stack([cat_sample, gauss_sample], axis=-1)
+
+    @classmethod
+    def fromflat(cls, flat):
+        """
+        Create an instance of this from new logits values
+
+        :param flat: ([float]) the multi categorical logits input
+        :return: (ProbabilityDistribution) the instance from the given multi categorical input
+        """
+        raise NotImplementedError
+
+
 class DiagGaussianProbabilityDistribution(ProbabilityDistribution):
     def __init__(self, flat):
         """
@@ -485,6 +584,20 @@ def make_proba_dist_type(ac_space):
         return MultiCategoricalProbabilityDistributionType(ac_space.nvec)
     elif isinstance(ac_space, spaces.MultiBinary):
         return BernoulliProbabilityDistributionType(ac_space.n)
+    elif isinstance(ac_space, spaces.Tuple):
+        if len(ac_space.spaces) != 2:
+            raise NotImplementedError("Only Tuple-spaces of length 2 are supported. Try rewriting your space as a length-2 tuple,",
+                                      " with a single MultiDiscrete for all categoricals and a single Box for all continuous values")
+        categorical_space_i = 0
+        if not isinstance(ac_space[0], MultiCategoricalProbabilityDistributionType):
+            # TODO: allow either ordering
+            raise NotImplementedError("Please format Tuple space as (MultiDiscrete, Box)")
+        categorical_space = ac_space[categorical_space_i]
+        categorical_nvec = categorical_space.nvec
+        box_space = ac_space[int(not  categorical_space_i)]
+        assert len(box_space.shape) == 1, "Error: the action space must be a vector"
+        box_size = box_space.shape[0]
+        return MultiMixedProbabilityDistributionType(categorical_nvec, box_size)
     else:
         raise NotImplementedError("Error: probability distribution, not implemented for action space of type {}."
                                   .format(type(ac_space)) +

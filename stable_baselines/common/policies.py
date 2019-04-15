@@ -4,11 +4,12 @@ from abc import ABC
 
 import numpy as np
 import tensorflow as tf
-from gym.spaces import Discrete
+from gym.spaces import Discrete, Tuple
 
 from stable_baselines.a2c.utils import conv, linear, conv_to_fc, batch_to_seq, seq_to_batch, lstm
 from stable_baselines.common.distributions import make_proba_dist_type, CategoricalProbabilityDistribution, \
-    MultiCategoricalProbabilityDistribution, DiagGaussianProbabilityDistribution, BernoulliProbabilityDistribution
+    MultiCategoricalProbabilityDistribution, DiagGaussianProbabilityDistribution, BernoulliProbabilityDistribution, \
+    MultiMixedProbabilityDistribution
 from stable_baselines.common.input import observation_input
 
 
@@ -183,6 +184,7 @@ class ActorCriticPolicy(BasePolicy):
                                                 scale=scale)
         self.pdtype = make_proba_dist_type(ac_space)
         self.is_discrete = isinstance(ac_space, Discrete)
+        self.is_tuple = isinstance(ac_space, Tuple)
         self.policy = None
         self.proba_distribution = None
         self.value_fn = None
@@ -207,6 +209,11 @@ class ActorCriticPolicy(BasePolicy):
             elif isinstance(self.proba_distribution, MultiCategoricalProbabilityDistribution):
                 self.policy_proba = [tf.nn.softmax(categorical.flatparam())
                                      for categorical in self.proba_distribution.categoricals]
+            elif isinstance(self.proba_distribution, MultiMixedProbabilityDistribution):
+                cat_policy_proba = [tf.nn.softmax(categorical.flatparam())
+                                    for categorical in self.proba_distribution.categoricals.categoricals]
+                gauss_policy_proba = [self.proba_distribution.gaussian.mean, self.proba_distribution.gaussian.std]
+                self.policy_proba = cat_policy_proba + gauss_policy_proba
             else:
                 self.policy_proba = []  # it will return nothing, as it is not implemented
             self._value = self.value_fn[:, 0]
