@@ -8,7 +8,7 @@ import numpy as np
 import tensorflow as tf
 
 from stable_baselines import logger
-from stable_baselines.common import explained_variance, ActorCriticRLModel, tf_util, SetVerbosity, TensorboardWriter
+from stable_baselines.common import explained_variance, ActorCriticRLModel, tf_util, SetVerbosity, TensorboardWriter, spaces
 from stable_baselines.common.runners import AbstractEnvRunner
 from stable_baselines.common.policies import LstmPolicy, ActorCriticPolicy
 from stable_baselines.a2c.utils import total_episode_reward_logger
@@ -94,7 +94,7 @@ class PPO2(ActorCriticRLModel):
 
     def _get_pretrain_placeholders(self):
         policy = self.act_model
-        if isinstance(self.action_space, gym.spaces.Discrete):
+        if isinstance(self.action_space, spaces.Discrete):
             return policy.obs_ph, self.action_ph, policy.policy
         return policy.obs_ph, self.action_ph, policy.deterministic_action
 
@@ -386,6 +386,8 @@ class PPO2(ActorCriticRLModel):
 
 
 class Runner(AbstractEnvRunner):
+    # TODO: this, follow lead of AbstractEnvRunner
+    # try to flatten actions/observations instead of returning lists though
     def __init__(self, *, env, model, n_steps, gamma, lam):
         """
         A runner to learn the policy of an environment for a model
@@ -427,9 +429,20 @@ class Runner(AbstractEnvRunner):
             mb_dones.append(self.dones)
             clipped_actions = actions
             # Clip the actions to avoid out of bound error
-            if isinstance(self.env.action_space, gym.spaces.Box):
+            if isinstance(self.env.action_space, spaces.Box):
                 clipped_actions = np.clip(actions, self.env.action_space.low, self.env.action_space.high)
+            elif isinstance(self.env.action_space, spaces.Tuple):
+                box_shape = self.env.action_space[1].shape[0]
+                box_actions = actions[:, -box_shape:]
+                clipped_actions = np.clip(box_actions, self.env.action_space[1].low, self.env.action_space[1].high)
+                clipped_actions = np.concatenate([actions[:, :-box_shape], clipped_actions], axis=-1)
             self.obs[:], rewards, self.dones, infos = self.env.step(clipped_actions)
+            # import pdb; pdb.set_trace()
+            # if isinstance(env.observation_space.Tuple):
+                # for i, o in enumerate(new_obs):
+                    # self.obs[i][:] = o
+            # else:
+            # self.obs[:] = obs
             for info in infos:
                 maybe_ep_info = info.get('episode')
                 if maybe_ep_info is not None:

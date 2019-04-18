@@ -4,7 +4,7 @@ from abc import ABC
 
 import numpy as np
 import tensorflow as tf
-from gym.spaces import Discrete, Tuple
+from stable_baselines.common.spaces import Discrete
 
 from stable_baselines.a2c.utils import conv, linear, conv_to_fc, batch_to_seq, seq_to_batch, lstm
 from stable_baselines.common.distributions import make_proba_dist_type, CategoricalProbabilityDistribution, \
@@ -184,7 +184,6 @@ class ActorCriticPolicy(BasePolicy):
                                                 scale=scale)
         self.pdtype = make_proba_dist_type(ac_space)
         self.is_discrete = isinstance(ac_space, Discrete)
-        self.is_tuple = isinstance(ac_space, Tuple)
         self.policy = None
         self.proba_distribution = None
         self.value_fn = None
@@ -296,9 +295,15 @@ class LstmPolicy(ActorCriticPolicy):
 
             with tf.variable_scope("model", reuse=reuse):
                 if feature_extraction == "cnn":
+                    if isinstance(self.processed_obs, list):
+                        raise ValueError("Cannot use cnn extractor with multiple input types, e.g. continuous and discrete")
                     extracted_features = cnn_extractor(self.processed_obs, **kwargs)
                 else:
-                    extracted_features = tf.layers.flatten(self.processed_obs)
+                    if isinstance(self.processed_obs, list):
+                        extracted_features = tf.concat([tf.layers.flatten(po) for po in self.processed_obs], axis=-1)
+                    else:
+                        extracted_features = tf.layers.flatten(self.processed_obs)
+
                     for i, layer_size in enumerate(layers):
                         extracted_features = act_fun(linear(extracted_features, 'pi_fc' + str(i), n_hidden=layer_size,
                                                             init_scale=np.sqrt(2)))
@@ -320,7 +325,10 @@ class LstmPolicy(ActorCriticPolicy):
                 raise NotImplementedError()
 
             with tf.variable_scope("model", reuse=reuse):
-                latent = tf.layers.flatten(self.processed_obs)
+                if isinstance(self.processed_obs, list):
+                    latent = tf.concat([tf.layers.flatten(po) for po in self.processed_obs], axis=-1)
+                else:
+                    latent = tf.layers.flatten(self.processed_obs)
                 policy_only_layers = []  # Layer sizes of the network that only belongs to the policy network
                 value_only_layers = []  # Layer sizes of the network that only belongs to the value network
 
@@ -384,16 +392,19 @@ class LstmPolicy(ActorCriticPolicy):
     def step(self, obs, state=None, mask=None, deterministic=False):
         if deterministic:
             return self.sess.run([self.deterministic_action, self._value, self.snew, self.neglogp],
-                                 {self.obs_ph: obs, self.states_ph: state, self.masks_ph: mask})
+                             {self.states_ph: state, self.masks_ph: mask, self.obs_ph: obs})
+
         else:
             return self.sess.run([self.action, self._value, self.snew, self.neglogp],
-                                 {self.obs_ph: obs, self.states_ph: state, self.masks_ph: mask})
+                             {self.states_ph: state, self.masks_ph: mask, self.obs_ph: obs})
 
     def proba_step(self, obs, state=None, mask=None):
-        return self.sess.run(self.policy_proba, {self.obs_ph: obs, self.states_ph: state, self.masks_ph: mask})
+        return self.sess.run(self.policy_proba,
+                             {self.states_ph: state, self.masks_ph: mask, self.obs_ph: obs})
 
     def value(self, obs, state=None, mask=None):
-        return self.sess.run(self._value, {self.obs_ph: obs, self.states_ph: state, self.masks_ph: mask})
+        return self.sess.run(self._value,
+                             {self.states_ph: state, self.masks_ph: mask, self.obs_ph: obs})
 
 
 class FeedForwardPolicy(ActorCriticPolicy):
@@ -438,9 +449,15 @@ class FeedForwardPolicy(ActorCriticPolicy):
 
         with tf.variable_scope("model", reuse=reuse):
             if feature_extraction == "cnn":
+                if isinstance(self.processed_obs, list):
+                    raise ValueError("Cannot use cnn extractor with multiple input types, e.g. continuous and discrete")
                 pi_latent = vf_latent = cnn_extractor(self.processed_obs, **kwargs)
             else:
-                pi_latent, vf_latent = mlp_extractor(tf.layers.flatten(self.processed_obs), net_arch, act_fun)
+                if isinstance(self.processed_obs, list):
+                    flat = tf.concat([tf.layers.flatten(po) for po in self.processed_obs], axis=-1)
+                else:
+                    flat = tf.layers.flatten(self.processed_obs)
+                pi_latent, vf_latent = mlp_extractor(flat, net_arch, act_fun)
 
             self.value_fn = linear(vf_latent, 'vf', 1)
 
@@ -449,6 +466,10 @@ class FeedForwardPolicy(ActorCriticPolicy):
 
         self.initial_state = None
         self._setup_init()
+
+    def format_feed_dict(self, obs):
+        fd[self.obs_ph] = obs
+        return fd
 
     def step(self, obs, state=None, mask=None, deterministic=False):
         if deterministic:

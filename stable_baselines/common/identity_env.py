@@ -1,7 +1,7 @@
 import numpy as np
 
 from gym import Env
-from gym.spaces import Discrete, MultiDiscrete, MultiBinary, Box
+from stable_baselines.common.spaces import Discrete, MultiDiscrete, MultiBinary, Box, MixedMultiDiscreteBox
 
 
 class IdentityEnv(Env):
@@ -102,4 +102,36 @@ class IdentityEnvMultiBinary(IdentityEnv):
         super(IdentityEnvMultiBinary, self).__init__(dim, ep_length)
         self.action_space = MultiBinary(dim)
         self.observation_space = self.action_space
+
+
+class IdentityEnvMultiMixed(IdentityEnv):
+    def __init__(self, discrete_dim, box_low=-1, box_high=1, eps=.05, ep_length=100):
+        """
+        Identity environment for testing purposes
+
+        :param discrete_dim: (int) the size of the dimensions you want to learn
+        :param low: (float) the lower bound of the box dim
+        :param high: (float) the upper bound of the box dim
+        :param eps: (float) the epsilon bound for correct value
+        :param ep_length: (int) the length of each episodes in timesteps
+        """
+        super(IdentityEnvMultiMixed, self).__init__(discrete_dim, ep_length)
+        self.action_space = MixedMultiDiscreteBox([discrete_dim, discrete_dim],
+                                                   box_low=box_low,
+                                                   box_high=box_high,
+                                                   box_shape=(1,),
+                                                   dtype=np.float32)
+        self.observation_space = self.action_space
+        self.eps = eps
+        self.ep_length = ep_length
         self.reset()
+
+    def _split_state(self, state):
+        return state[:-1], state[-1]
+
+    def _get_reward(self, action):
+        discrete_action, box_action = self._split_state(action)
+        discrete_state, box_state = self._split_state(self.state)
+        discrete_reward = 1 if np.all(discrete_state == discrete_action) else 0
+        box_reward =  1 if (box_state - self.eps) <= box_action <= (box_state + self.eps) else 0
+        return discrete_reward & box_reward

@@ -11,6 +11,7 @@ import tensorflow as tf
 from stable_baselines.common import set_global_seeds
 from stable_baselines.common.policies import LstmPolicy, get_policy_from_name, ActorCriticPolicy
 from stable_baselines.common.vec_env import VecEnvWrapper, VecEnv, DummyVecEnv
+from stable_baselines.common import spaces
 from stable_baselines import logger
 
 
@@ -183,8 +184,8 @@ class BaseRLModel(ABC):
             By default, every 10th of the maximum number of epochs.
         :return: (BaseRLModel) the pretrained model
         """
-        continuous_actions = isinstance(self.action_space, gym.spaces.Box)
-        discrete_actions = isinstance(self.action_space, gym.spaces.Discrete)
+        continuous_actions = isinstance(self.action_space, spaces.Box)
+        discrete_actions = isinstance(self.action_space, spaces.Discrete)
 
         assert discrete_actions or continuous_actions, 'Only Discrete and Box action spaces are supported'
 
@@ -293,6 +294,7 @@ class BaseRLModel(ABC):
         depending on the action space the output is:
             - Discrete: probability for each possible action
             - Box: mean and standard deviation of the action output
+            - Mixed: tuple of Discrete case and Box case
 
         However if ``actions`` is not ``None``, this function will return the probability that the given actions are
         taken with the given parameters (observation, state, ...) on this model.
@@ -384,10 +386,10 @@ class BaseRLModel(ABC):
         then returns whether or not the observation is vectorized.
 
         :param observation: (np.ndarray) the input observation to validate
-        :param observation_space: (gym.spaces) the observation space
+        :param observation_space: (spaces) the observation space
         :return: (bool) whether the given observation is vectorized or not
         """
-        if isinstance(observation_space, gym.spaces.Box):
+        if isinstance(observation_space, spaces.Box):
             if observation.shape == observation_space.shape:
                 return False
             elif observation.shape[1:] == observation_space.shape:
@@ -397,7 +399,7 @@ class BaseRLModel(ABC):
                                  "Box environment, please use {} ".format(observation_space.shape) +
                                  "or (n_env, {}) for the observation shape."
                                  .format(", ".join(map(str, observation_space.shape))))
-        elif isinstance(observation_space, gym.spaces.Discrete):
+        elif isinstance(observation_space, spaces.Discrete):
             if observation.shape == ():  # A numpy array of a number, has shape empty tuple '()'
                 return False
             elif len(observation.shape) == 1:
@@ -405,7 +407,7 @@ class BaseRLModel(ABC):
             else:
                 raise ValueError("Error: Unexpected observation shape {} for ".format(observation.shape) +
                                  "Discrete environment, please use (1,) or (n_env, 1) for the observation shape.")
-        elif isinstance(observation_space, gym.spaces.MultiDiscrete):
+        elif isinstance(observation_space, spaces.MultiDiscrete):
             if observation.shape == (len(observation_space.nvec),):
                 return False
             elif len(observation.shape) == 2 and observation.shape[1] == len(observation_space.nvec):
@@ -414,7 +416,7 @@ class BaseRLModel(ABC):
                 raise ValueError("Error: Unexpected observation shape {} for MultiDiscrete ".format(observation.shape) +
                                  "environment, please use ({},) or ".format(len(observation_space.nvec)) +
                                  "(n_env, {}) for the observation shape.".format(len(observation_space.nvec)))
-        elif isinstance(observation_space, gym.spaces.MultiBinary):
+        elif isinstance(observation_space, spaces.MultiBinary):
             if observation.shape == (observation_space.n,):
                 return False
             elif len(observation.shape) == 2 and observation.shape[1] == observation_space.n:
@@ -423,6 +425,15 @@ class BaseRLModel(ABC):
                 raise ValueError("Error: Unexpected observation shape {} for MultiBinary ".format(observation.shape) +
                                  "environment, please use ({},) or ".format(observation_space.n) +
                                  "(n_env, {}) for the observation shape.".format(observation_space.n))
+        elif isinstance(observation_space, spaces.MixedMultiDiscreteBox):
+            if observation.shape == observation_space.shape[0]:
+                return False
+            elif len(observation.shape) == 2 and observation.shape[1] == observation_space.shape[0]:
+                return True
+            else:
+                raise ValueError("Error: Unexpected observation shape {} for MultiMixed ".format(observation.shape) +
+                                 "environment, please use ({},) or ".format(observation_space.shape[0]) +
+                                 "(n_env, {}) for the observation shape.".format(observation_space.shape[0]))
         else:
             raise ValueError("Error: Cannot determine if the observation is vectorized with the space type {}."
                              .format(observation_space))
@@ -473,7 +484,7 @@ class ActorCriticRLModel(BaseRLModel):
 
         clipped_actions = actions
         # Clip the actions to avoid out of bound error
-        if isinstance(self.action_space, gym.spaces.Box):
+        if isinstance(self.action_space, spaces.Box):
             clipped_actions = np.clip(actions, self.action_space.low, self.action_space.high)
 
         if not vectorized_env:
@@ -501,13 +512,13 @@ class ActorCriticRLModel(BaseRLModel):
 
         if actions is not None:  # comparing the action distribution, to given actions
             actions = np.array([actions])
-            if isinstance(self.action_space, gym.spaces.Discrete):
+            if isinstance(self.action_space, spaces.Discrete):
                 actions = actions.reshape((-1,))
                 assert observation.shape[0] == actions.shape[0], \
                     "Error: batch sizes differ for actions and observations."
                 actions_proba = actions_proba[np.arange(actions.shape[0]), actions]
 
-            elif isinstance(self.action_space, gym.spaces.MultiDiscrete):
+            elif isinstance(self.action_space, spaces.MultiDiscrete):
                 actions = actions.reshape((-1, len(self.action_space.nvec)))
                 assert observation.shape[0] == actions.shape[0], \
                     "Error: batch sizes differ for actions and observations."
@@ -516,14 +527,17 @@ class ActorCriticRLModel(BaseRLModel):
                 actions_proba = np.prod([proba[np.arange(act.shape[0]), act]
                                          for proba, act in zip(actions_proba, actions)], axis=0)
 
-            elif isinstance(self.action_space, gym.spaces.MultiBinary):
+            elif isinstance(self.action_space, spaces.MultiBinary):
                 actions = actions.reshape((-1, self.action_space.n))
                 assert observation.shape[0] == actions.shape[0], \
                     "Error: batch sizes differ for actions and observations."
                 # Bernoulli action probability, for every action
                 actions_proba = np.prod(actions_proba * actions + (1 - actions_proba) * (1 - actions), axis=1)
 
-            elif isinstance(self.action_space, gym.spaces.Box):
+            # We assume that the Tuple space consists of a MultiDiscrete and a Box
+            # Since there is at least some continuous element, the probability
+            # gets multiplied by that element to total exactly zero
+            elif isinstance(self.action_space, (spaces.Box, spaces.MixedMultiDiscreteBox)):
                 warnings.warn("The probabilty of taken a given action is exactly zero for a continuous distribution."
                               "See http://blog.christianperone.com/2019/01/ for a good explanation")
                 actions_proba = np.zeros((observation.shape[0], 1), dtype=np.float32)

@@ -1,9 +1,9 @@
 import numpy as np
 import tensorflow as tf
 from tensorflow.python.ops import math_ops
-from gym import spaces
 
 from stable_baselines.a2c.utils import linear
+from stable_baselines.common import spaces
 
 
 class ProbabilityDistribution(object):
@@ -180,12 +180,13 @@ class CategoricalProbabilityDistributionType(ProbabilityDistributionType):
 
 
 class MultiCategoricalProbabilityDistributionType(ProbabilityDistributionType):
-    def __init__(self, n_vec):
+    def __init__(self, n_vec, scope=None):
         """
         The probability distribution type for multiple categorical input
 
         :param n_vec: ([int]) the vectors
         """
+        self.scope = scope or ''
         # Cast the variable because tf does not allow uint32
         self.n_vec = n_vec.astype(np.int32)
         # Check that the cast was valid
@@ -198,8 +199,9 @@ class MultiCategoricalProbabilityDistributionType(ProbabilityDistributionType):
         return MultiCategoricalProbabilityDistribution(self.n_vec, flat)
 
     def proba_distribution_from_latent(self, pi_latent_vector, vf_latent_vector, init_scale=1.0, init_bias=0.0):
-        pdparam = linear(pi_latent_vector, 'pi', sum(self.n_vec), init_scale=init_scale, init_bias=init_bias)
-        q_values = linear(vf_latent_vector, 'q', sum(self.n_vec), init_scale=init_scale, init_bias=init_bias)
+        with tf.variable_scope(self.scope):
+            pdparam = linear(pi_latent_vector, 'pi', sum(self.n_vec), init_scale=init_scale, init_bias=init_bias)
+            q_values = linear(vf_latent_vector, 'q', sum(self.n_vec), init_scale=init_scale, init_bias=init_bias)
         return self.proba_distribution_from_flat(pdparam), pdparam, q_values
 
     def param_shape(self):
@@ -220,8 +222,8 @@ class MultiMixedProbabilityDistributionType(ProbabilityDistributionType):
         :param categorical_n_vec: ([int]) the vectors for categorical inputs
         :param gaussian_size: (int) the number of dimensions of the multivariate gaussian
         """
-        self.multi_cat = MultiCategoricalProbabilityDistributionType(categorical_n_vec)
-        self.gaussian = DiagGaussianProbabilityDistributionType(gaussian_size)
+        self.multi_cat = MultiCategoricalProbabilityDistributionType(categorical_n_vec, scope='MultiCategoricalDist')
+        self.gaussian = DiagGaussianProbabilityDistributionType(gaussian_size, scope='DiagGaussianDist')
 
     def probability_distribution_class(self):
         return MultiMixedProbabilityDistribution
@@ -234,9 +236,9 @@ class MultiMixedProbabilityDistributionType(ProbabilityDistributionType):
             pi_latent_vector, vf_latent_vector, init_scale=init_scale, init_bias=init_bias)
         prob_a_dist_gauss, pdparam_gauss, q_values_gauss = self.gaussian.proba_distribution_from_latent(
             pi_latent_vector, vf_latent_vector, init_scale=init_scale, init_bias=init_bias)
-        return (tf.concat([prob_a_dist_cat, prob_a_dist_gauss]),
-                tf.concat([pdparam_cat, pdparam_gauss]),
-                tf.concat([q_values_cat, q_values_gauss]))
+        return (MultiMixedProbabilityDistribution(categoricals=prob_a_dist_cat, gaussian=prob_a_dist_gauss),
+                tf.concat([pdparam_cat, pdparam_gauss], axis=-1),
+                tf.concat([q_values_cat, q_values_gauss], axis=-1))
 
 
     def param_shape(self):
@@ -249,12 +251,13 @@ class MultiMixedProbabilityDistributionType(ProbabilityDistributionType):
         return tf.float32
 
 class DiagGaussianProbabilityDistributionType(ProbabilityDistributionType):
-    def __init__(self, size):
+    def __init__(self, size, scope=None):
         """
         The probability distribution type for multivariate gaussian input
 
         :param size: (int) the number of dimensions of the multivariate gaussian
         """
+        self.scope = scope or ''
         self.size = size
 
     def probability_distribution_class(self):
@@ -270,10 +273,11 @@ class DiagGaussianProbabilityDistributionType(ProbabilityDistributionType):
         return self.probability_distribution_class()(flat)
 
     def proba_distribution_from_latent(self, pi_latent_vector, vf_latent_vector, init_scale=1.0, init_bias=0.0):
-        mean = linear(pi_latent_vector, 'pi', self.size, init_scale=init_scale, init_bias=init_bias)
-        logstd = tf.get_variable(name='pi/logstd', shape=[1, self.size], initializer=tf.zeros_initializer())
-        pdparam = tf.concat([mean, mean * 0.0 + logstd], axis=1)
-        q_values = linear(vf_latent_vector, 'q', self.size, init_scale=init_scale, init_bias=init_bias)
+        with tf.variable_scope(self.scope):
+            mean = linear(pi_latent_vector, 'pi', self.size, init_scale=init_scale, init_bias=init_bias)
+            logstd = tf.get_variable(name='pi/logstd', shape=[1, self.size], initializer=tf.zeros_initializer())
+            pdparam = tf.concat([mean, mean * 0.0 + logstd], axis=1)
+            q_values = linear(vf_latent_vector, 'q', self.size, init_scale=init_scale, init_bias=init_bias)
         return self.proba_distribution_from_flat(pdparam), mean, q_values
 
     def param_shape(self):
@@ -411,28 +415,34 @@ class MultiCategoricalProbabilityDistribution(ProbabilityDistribution):
 
 
 class MultiMixedProbabilityDistribution(ProbabilityDistribution):
-    def __init__(self, nvec, flat):
+    def __init__(self, nvec=None, flat=None, categoricals=None, gaussian=None):
         """
         Probability distributions from mixed multicategorical gaussian inputs
 
         :param categorical_nvec: ([int]) the sizes of the different categorical inputs
         :param flat: ([float]) part categorical logits input, part multivariate gaussian input data
         """
-        self.cat_begin = [0 for _ in flat.get_shape()]
-        self.cat_size = flat.get_shape()
-        self.cat_size[-1] = sum(nvec)
-        self.gauss_begin = cat_size
-        self.gauss_end = [-1 for _ in flat.get_shape()]
+        if categoricals is None:
+            if nvec is None or flat is None:
+                raise ValueError("Must provide either `nvec` and `flat`, or already instantiated distributions"\
+                                 "`categoricals` and `gaussians`")
+            self.cat_begin = [0, 0]
+            #self.cat_size = sum(nvec)
+            self.cat_size = len(nvec)
 
-        self.categoricals = MultiCategoricalProbabilityDistribution(nvec, self._get_cat_part(flat))
-        self.gaussian = DiagGaussianProbabilityDistribution(self._get_gauss_part(flat))
-        self.flat = flat
+            self.categoricals = MultiCategoricalProbabilityDistribution(nvec, self._get_cat_part(flat))
+            self.gaussian = DiagGaussianProbabilityDistribution(self._get_gauss_part(flat))
+            self.flat = flat
+        else:
+            self.categoricals = categoricals
+            self.gaussian = gaussian
+            self.cat_size = len(self.categoricals.categoricals)#.flat.get_shape()[-1].value
 
     def _get_cat_part(self, _input):
-        return tf.slice(_input, self.cat_begin, self.cat_size)
+        return tf.cast(_input[:, :self.cat_size], tf.int64)
 
     def _get_gauss_part(self, _input):
-        return tf.slice(_input, self.gauss_begin, self.gauss_end)
+        return _input[:, self.cat_size:]
 
     def flatparam(self):
         return self.flat
@@ -440,7 +450,7 @@ class MultiMixedProbabilityDistribution(ProbabilityDistribution):
     def mode(self):
         cat_mode = tf.cast(self.categoricals.mode(), tf.float32)
         gauss_mode = self.gaussian.mode()
-        return tf.stack([cat_mode, gauss_mode], axis=-1)
+        return tf.concat([cat_mode, gauss_mode], axis=-1)
 
     def neglogp(self, x):
         cat_x = self._get_cat_part(x)
@@ -460,7 +470,7 @@ class MultiMixedProbabilityDistribution(ProbabilityDistribution):
     def sample(self):
         cat_sample = tf.cast(self.categoricals.sample(), tf.float32)
         gauss_sample = self.gaussian.sample()
-        return tf.stack([cat_sample, gauss_sample], axis=-1)
+        return tf.concat([cat_sample, gauss_sample], axis=-1)
 
     @classmethod
     def fromflat(cls, flat):
@@ -584,20 +594,9 @@ def make_proba_dist_type(ac_space):
         return MultiCategoricalProbabilityDistributionType(ac_space.nvec)
     elif isinstance(ac_space, spaces.MultiBinary):
         return BernoulliProbabilityDistributionType(ac_space.n)
-    elif isinstance(ac_space, spaces.Tuple):
-        if len(ac_space.spaces) != 2:
-            raise NotImplementedError("Only Tuple-spaces of length 2 are supported. Try rewriting your space as a length-2 tuple,",
-                                      " with a single MultiDiscrete for all categoricals and a single Box for all continuous values")
-        categorical_space_i = 0
-        if not isinstance(ac_space[0], MultiCategoricalProbabilityDistributionType):
-            # TODO: allow either ordering
-            raise NotImplementedError("Please format Tuple space as (MultiDiscrete, Box)")
-        categorical_space = ac_space[categorical_space_i]
-        categorical_nvec = categorical_space.nvec
-        box_space = ac_space[int(not  categorical_space_i)]
-        assert len(box_space.shape) == 1, "Error: the action space must be a vector"
-        box_size = box_space.shape[0]
-        return MultiMixedProbabilityDistributionType(categorical_nvec, box_size)
+    elif isinstance(ac_space, spaces.MixedMultiDiscreteBox):
+        return MultiMixedProbabilityDistributionType(ac_space.multi_discrete.nvec,
+                                                     ac_space.box.shape[0])
     else:
         raise NotImplementedError("Error: probability distribution, not implemented for action space of type {}."
                                   .format(type(ac_space)) +
