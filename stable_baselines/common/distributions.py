@@ -215,37 +215,49 @@ class MultiCategoricalProbabilityDistributionType(ProbabilityDistributionType):
 
 
 class MultiMixedProbabilityDistributionType(ProbabilityDistributionType):
-    def __init__(self, categorical_n_vec, gaussian_size):
+    def __init__(self, categorical_n_vec, gaussian_size, scope=None):
         """
         The probability distribution type for multiple categorical and gaussian inputs
 
         :param categorical_n_vec: ([int]) the vectors for categorical inputs
         :param gaussian_size: (int) the number of dimensions of the multivariate gaussian
         """
-        self.multi_cat = MultiCategoricalProbabilityDistributionType(categorical_n_vec, scope='MultiCategoricalDist')
-        self.gaussian = DiagGaussianProbabilityDistributionType(gaussian_size, scope='DiagGaussianDist')
+        self.scope = scope or ''
+        self.categorical_n_vec = categorical_n_vec
+        self.gaussian_size = gaussian_size
+        #self.multi_cat = MultiCategoricalProbabilityDistributionType(self.categorical_n_vec, scope='MultiCategoricalDist')
+        self.gaussian = DiagGaussianProbabilityDistributionType(self.gaussian_size, scope='DiagGaussianDist')
 
     def probability_distribution_class(self):
         return MultiMixedProbabilityDistribution
 
     def proba_distribution_from_flat(self, flat):
-        return MultiMixedProbabilityDistribution(self.n_vec, self.gaussian_size, flat)
+        return MultiMixedProbabilityDistribution(self.categorical_n_vec, flat)
 
     def proba_distribution_from_latent(self, pi_latent_vector, vf_latent_vector, init_scale=1.0, init_bias=0.0):
-        prob_a_dist_cat, pdparam_cat, q_values_cat = self.multi_cat.proba_distribution_from_latent(
-            pi_latent_vector, vf_latent_vector, init_scale=init_scale, init_bias=init_bias)
-        prob_a_dist_gauss, pdparam_gauss, q_values_gauss = self.gaussian.proba_distribution_from_latent(
-            pi_latent_vector, vf_latent_vector, init_scale=init_scale, init_bias=init_bias)
-        return (MultiMixedProbabilityDistribution(categoricals=prob_a_dist_cat, gaussian=prob_a_dist_gauss),
-                tf.concat([pdparam_cat, pdparam_gauss], axis=-1),
-                tf.concat([q_values_cat, q_values_gauss], axis=-1))
+        with tf.variable_scope(self.scope):
+            mean = linear(pi_latent_vector, 'gaussian/pi', self.gaussian_size, init_scale=init_scale, init_bias=init_bias)
+            logstd = tf.get_variable(name='gaussian/pi/logstd', shape=[1, self.gaussian_size], initializer=tf.zeros_initializer())
+            # gauss_pdparam = tf.concat([mean, mean * 0.0 + logstd], axis=1)
+            gauss_q_values = linear(vf_latent_vector, 'gaussian/q', self.gaussian_size, init_scale=init_scale, init_bias=init_bias)
 
+            # cat_pdparam = linear(pi_latent_vector, 'categorical/pi', sum(self.categorical_n_vec), init_scale=init_scale, init_bias=init_bias)
+            #cat_pdparam = tf.get_variable(name='fake_cat', shape=[1, sum(self.categorical_n_vec),])
+            gauss_pdparam = tf.concat([mean, mean * 0.0 + logstd], axis=1)
+            # pdparam = tf.concat([mean*0.0 + cat_pdparam, mean, mean * 0.0 + logstd], axis=1)
+            # q_values = linear(vf_latent_vector, 'q', sum(self.categorical_n_vec) + self.gaussian_size, init_scale=init_scale, init_bias=init_bias)
+        #return self.proba_distribution_from_flat(pdparam), tf.concat([cat_pdparam, mean], axis=1), q_values
+        #return self.proba_distribution_from_flat(pdparam),  mean, gauss_q_values
+        return self.proba_distribution_from_flat(gauss_pdparam),  mean, gauss_q_values
 
     def param_shape(self):
-        return [self.multi_cat.param_shape()[0] + self.gaussian.param_shape()[0]]
+        #return [self.multi_cat.param_shape()[0] + self.gaussian.param_shape()[0]]
+        return [self.gaussian.param_shape()[0]]
 
     def sample_shape(self):
-        return [self.multi_cat.sample_shape()[0] + self.gaussian.sample_shape()[0]]
+        #return [self.multi_cat.sample_shape()[0] + self.gaussian.sample_shape()[0]]
+        return [2 + self.gaussian.sample_shape()[0]]
+        # return self.gaussian.sample_shape()
 
     def sample_dtype(self):
         return tf.float32
@@ -415,31 +427,51 @@ class MultiCategoricalProbabilityDistribution(ProbabilityDistribution):
 
 
 class MultiMixedProbabilityDistribution(ProbabilityDistribution):
-    def __init__(self, nvec=None, flat=None, categoricals=None, gaussian=None):
+    def __init__(self, categorical_nvec=None, flat=None, categoricals=None, gaussian=None):
         """
         Probability distributions from mixed multicategorical gaussian inputs
 
         :param categorical_nvec: ([int]) the sizes of the different categorical inputs
         :param flat: ([float]) part categorical logits input, part multivariate gaussian input data
+        :param categoricals:  TODO
+        :param gaussian: TODO
+
         """
         if categoricals is None:
-            if nvec is None or flat is None:
+            if categorical_nvec is None or flat is None:
                 raise ValueError("Must provide either `nvec` and `flat`, or already instantiated distributions"\
                                  "`categoricals` and `gaussians`")
-            self.cat_begin = [0, 0]
-            #self.cat_size = sum(nvec)
-            self.cat_size = len(nvec)
+            self.cat_size_one_hot = sum(categorical_nvec)
+            self.cat_size = len(categorical_nvec)
 
-            self.categoricals = MultiCategoricalProbabilityDistribution(nvec, self._get_cat_part(flat))
-            self.gaussian = DiagGaussianProbabilityDistribution(self._get_gauss_part(flat))
+            # self.categoricals = MultiCategoricalProbabilityDistribution(categorical_nvec,
+                                                                        # self._get_cat_part_one_hot(flat))
+            # self.gaussian = DiagGaussianProbabilityDistribution(self._get_gauss_part_one_hot(flat))
+            self.gaussian = DiagGaussianProbabilityDistribution(flat)
             self.flat = flat
         else:
             self.categoricals = categoricals
             self.gaussian = gaussian
-            self.cat_size = len(self.categoricals.categoricals)#.flat.get_shape()[-1].value
+            self.cat_size = sum([cat.logits.get_shape()[-1].value for cat in self.categoricals.categoricals])
+            # self.cat_size = len(self.categoricals.categoricals)#.flat.get_shape()[-1].value
+        # prob_a_dist_cat, pdparam_cat, q_values_cat = self.multi_cat.proba_distribution_from_latent(
+            # pi_latent_vector, vf_latent_vector, init_scale=init_scale, init_bias=init_bias)
+        # prob_a_dist_gauss, pdparam_gauss, q_values_gauss = self.gaussian.proba_distribution_from_latent(
+            # pi_latent_vector, vf_latent_vector, init_scale=init_scale, init_bias=init_bias)
+        # return (MultiMixedProbabilityDistribution(categoricals=prob_a_dist_cat, gaussian=prob_a_dist_gauss),
+                # tf.concat([pdparam_cat, pdparam_gauss], axis=-1),
+                # tf.concat([q_values_cat, q_values_gauss], axis=-1))
+
+
+
+    def _get_cat_part_one_hot(self, _input):
+        return _input[:, :self.cat_size_one_hot]
 
     def _get_cat_part(self, _input):
-        return tf.cast(_input[:, :self.cat_size], tf.int64)
+        return _input[:, :self.cat_size]
+
+    def _get_gauss_part_one_hot(self, _input):
+        return _input[:, self.cat_size_one_hot:]
 
     def _get_gauss_part(self, _input):
         return _input[:, self.cat_size:]
@@ -448,29 +480,43 @@ class MultiMixedProbabilityDistribution(ProbabilityDistribution):
         return self.flat
 
     def mode(self):
-        cat_mode = tf.cast(self.categoricals.mode(), tf.float32)
+        #cat_mode = tf.cast(self.categoricals.mode(), tf.float32)
         gauss_mode = self.gaussian.mode()
-        return tf.concat([cat_mode, gauss_mode], axis=-1)
+        #return tf.concat([cat_mode, gauss_mode], axis=-1)
+        return gauss_mode
 
     def neglogp(self, x):
-        cat_x = self._get_cat_part(x)
+        # TODO: this cast?
+        #cat_x = tf.cast(self._get_cat_part(x), tf.int64)
         gauss_x = self._get_gauss_part(x)
-        return tf.add_n([self.categoricals.neglogp(cat_x), self.gaussian.neglogp(gauss_x)])
+        #return tf.add_n([self.categoricals.neglogp(cat_x), self.gaussian.neglogp(gauss_x)])
+        # gauss_x = x
+        return self.gaussian.neglogp(gauss_x)
 
     def kl(self, other):
-        cat_kl = self.categoricals.kl(other.categoricals)
+        #cat_kl = self.categoricals.kl(other.categoricals)
         gauss_kl = self.gaussian.kl(other.gaussian)
-        return tf.add_n([cat_kl, gauss_kl])
+        #return tf.add_n([cat_kl, gauss_kl])
+        return gauss_kl
 
     def entropy(self):
-        cat_entropy = self.categoricals.entropy()
+        #cat_entropy = self.categoricals.entropy()
         gauss_entropy = self.gaussian.entropy()
-        return tf.add_n([cat_entropy, gauss_entropy])
+        #return tf.add_n([cat_entropy, gauss_entropy])
+        return gauss_entropy
 
     def sample(self):
-        cat_sample = tf.cast(self.categoricals.sample(), tf.float32)
         gauss_sample = self.gaussian.sample()
+        #cat_sample = tf.cast(self.categoricals.sample(), tf.float32)
+        # TODO: here
+        with tf.variable_scope("categoricals", reuse=tf.AUTO_REUSE):
+            cat_sample = tf.get_variable('cat_sample',
+                                     shape=[1, self.cat_size],
+                                     trainable=False,
+                                     initializer=tf.zeros_initializer())
+            cat_sample = gauss_sample * 0.0 + cat_sample
         return tf.concat([cat_sample, gauss_sample], axis=-1)
+        #return gauss_sample
 
     @classmethod
     def fromflat(cls, flat):

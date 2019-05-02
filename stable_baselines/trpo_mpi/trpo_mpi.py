@@ -2,14 +2,13 @@ import time
 from contextlib import contextmanager
 from collections import deque
 
-import gym
 from mpi4py import MPI
 import tensorflow as tf
 import numpy as np
 
 import stable_baselines.common.tf_util as tf_util
 from stable_baselines.common import explained_variance, zipsame, dataset, fmt_row, colorize, ActorCriticRLModel, \
-    SetVerbosity, TensorboardWriter
+    SetVerbosity, TensorboardWriter, spaces
 from stable_baselines import logger
 from stable_baselines.common.mpi_adam import MpiAdam
 from stable_baselines.common.cg import conjugate_gradient
@@ -99,7 +98,7 @@ class TRPO(ActorCriticRLModel):
     def _get_pretrain_placeholders(self):
         policy = self.policy_pi
         action_ph = policy.pdtype.sample_placeholder([None])
-        if isinstance(self.action_space, gym.spaces.Discrete):
+        if isinstance(self.action_space, spaces.Discrete):
             return policy.obs_ph, action_ph, policy.policy
         return policy.obs_ph, action_ph, policy.deterministic_action
 
@@ -433,7 +432,7 @@ class TRPO(ActorCriticRLModel):
                                 self.reward_giver.obs_rms.update(np.concatenate((ob_batch, ob_expert), 0))
 
                             # Reshape actions if needed when using discrete actions
-                            if isinstance(self.action_space, gym.spaces.Discrete):
+                            if isinstance(self.action_space, spaces.Discrete):
                                 if len(ac_batch.shape) == 2:
                                     ac_batch = ac_batch[:, 0]
                                 if len(ac_expert.shape) == 2:

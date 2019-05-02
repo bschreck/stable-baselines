@@ -1,4 +1,4 @@
-from gym.spaces import Discrete, Discrete, MultiDiscrete, MultiBinary, Box, Dict, Tuple
+from gym.spaces import Discrete, MultiDiscrete, MultiBinary, Box, Dict, Tuple
 import numpy as np
 
 
@@ -21,6 +21,8 @@ class MixedMultiDiscreteBox(Tuple):
 
     def sample(self):
         tuple_sample = super().sample()
+        # TODO: here
+        tuple_sample = (np.array([0,0]), tuple_sample[1])
         return np.concatenate([tuple_sample[0].astype(self.spaces[1].dtype),
                                tuple_sample[1]], axis=-1)
 

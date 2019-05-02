@@ -3,7 +3,7 @@ import numpy as np
 
 from stable_baselines import A2C, ACER, ACKTR, DQN, DDPG, PPO1, PPO2, TRPO
 from stable_baselines.ddpg import AdaptiveParamNoiseSpec
-from stable_baselines.common.identity_env import IdentityEnv, IdentityEnvBox
+from stable_baselines.common.identity_env import IdentityEnv, IdentityEnvBox, IdentityEnvMultiMixed
 from stable_baselines.common.vec_env import DummyVecEnv
 from stable_baselines.common import set_global_seeds
 
@@ -78,6 +78,47 @@ def test_identity_ddpg():
         action, _ = model.predict(obs)
         obs, reward, _, _ = env.step(action)
         reward_sum += reward
+    assert reward_sum > 0.9 * n_trials
+    # Free memory
+    del model, env
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize("model_name", ['ppo2'])#['a2c', 'acer', 'acktr', 'dqn', 'ppo1', 'ppo2', 'trpo'])
+def test_identity_multi_mixed(model_name):
+    """
+    Test if the algorithm (with a given policy)
+    can learn an identity transformation (i.e. return observation as an action)
+    """
+    env = DummyVecEnv([lambda: IdentityEnvMultiMixed(2, eps=1.0)])
+    # env = DummyVecEnv([lambda: IdentityEnvBox(eps=1.00)])
+
+    model = PPO2(policy="MlpPolicy", env=env,
+                    learning_rate=1.5e-3, lam=0.8,
+                    verbose=2,
+                    tensorboard_log='/Users/benschreck/tensorboard_log',
+                    full_tensorboard_log=True)
+    model.learn(total_timesteps=20000, seed=0),
+    #model = LEARN_FUNC_DICT[model_name](env,
+    #model.learn(total_timesteps=20000, seed=0,)
+    # modelb = LEARN_FUNC_DICT[model_name](envb)
+    # modelb.learn(total_timesteps=20000, seed=0)
+
+    n_trials = 1000
+    reward_sum = 0
+    set_global_seeds(0)
+    obs = env.reset()
+    for _ in range(n_trials):
+        action, _ = model.predict(obs)
+        obs, reward, _, _ = env.step(action)
+        reward_sum += reward
+
+    action_prob = model.action_probability(obs)
+    # assert (np.array(action_prob[:2]).shape == (2, 1, 2) and
+            # np.array(action_prob[2:]).shape == (2, 1, 1)), \
+        # "Error: action_probability not returning correct shape"
+    # assert np.prod(model.action_probability(obs, actions=env.action_space.sample()).shape) == 1, \
+        # "Error: not scalar probability"
     assert reward_sum > 0.9 * n_trials
     # Free memory
     del model, env

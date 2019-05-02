@@ -57,6 +57,7 @@ class IdentityEnvBox(IdentityEnv):
         self.observation_space = self.action_space
         self.eps = eps
         self.reset()
+        self._rewards = []
 
     def reset(self):
         self.current_step = 0
@@ -74,7 +75,9 @@ class IdentityEnvBox(IdentityEnv):
         self.state = self.observation_space.sample()
 
     def _get_reward(self, action):
-        return 1 if (self.state - self.eps) <= action <= (self.state + self.eps) else 0
+        reward =  1 if (self.state - self.eps) <= action <= (self.state + self.eps) else 0
+        self._rewards.append(reward)
+        return reward
 
 
 class IdentityEnvMultiDiscrete(IdentityEnv):
@@ -115,16 +118,20 @@ class IdentityEnvMultiMixed(IdentityEnv):
         :param eps: (float) the epsilon bound for correct value
         :param ep_length: (int) the length of each episodes in timesteps
         """
-        super(IdentityEnvMultiMixed, self).__init__(discrete_dim, ep_length)
+        super(IdentityEnvMultiMixed, self).__init__(discrete_dim + 1, ep_length)
         self.action_space = MixedMultiDiscreteBox([discrete_dim, discrete_dim],
                                                    box_low=box_low,
                                                    box_high=box_high,
                                                    box_shape=(1,),
                                                    dtype=np.float32)
+        # super(IdentityEnvMultiMixed, self).__init__(1, ep_length)
+        # self.action_space = Box(low=box_low, high=box_high, shape=(1,), dtype=np.float32)
         self.observation_space = self.action_space
         self.eps = eps
         self.ep_length = ep_length
         self.reset()
+        self._discrete_rewards = []
+        self._box_rewards = []
 
     def _split_state(self, state):
         return state[:-1], state[-1]
@@ -134,4 +141,7 @@ class IdentityEnvMultiMixed(IdentityEnv):
         discrete_state, box_state = self._split_state(self.state)
         discrete_reward = 1 if np.all(discrete_state == discrete_action) else 0
         box_reward =  1 if (box_state - self.eps) <= box_action <= (box_state + self.eps) else 0
-        return discrete_reward & box_reward
+        self._discrete_rewards.append(discrete_reward)
+        self._box_rewards.append(box_reward)
+        return box_reward
+        #return discrete_reward & box_reward

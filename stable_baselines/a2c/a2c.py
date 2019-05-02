@@ -1,12 +1,11 @@
 import time
 from collections import deque
 
-import gym
 import numpy as np
 import tensorflow as tf
 
 from stable_baselines import logger
-from stable_baselines.common import explained_variance, tf_util, ActorCriticRLModel, SetVerbosity, TensorboardWriter
+from stable_baselines.common import explained_variance, tf_util, ActorCriticRLModel, SetVerbosity, TensorboardWriter, spaces
 from stable_baselines.common.policies import LstmPolicy, ActorCriticPolicy
 from stable_baselines.common.runners import AbstractEnvRunner
 from stable_baselines.a2c.utils import discount_with_dones, Scheduler, find_trainable_variables, mse, \
@@ -87,7 +86,7 @@ class A2C(ActorCriticRLModel):
 
     def _get_pretrain_placeholders(self):
         policy = self.train_model
-        if isinstance(self.action_space, gym.spaces.Discrete):
+        if isinstance(self.action_space, spaces.Discrete):
             return policy.obs_ph, self.actions_ph, policy.policy
         return policy.obs_ph, self.actions_ph, policy.deterministic_action
 
@@ -328,8 +327,13 @@ class A2CRunner(AbstractEnvRunner):
             mb_dones.append(self.dones)
             clipped_actions = actions
             # Clip the actions to avoid out of bound error
-            if isinstance(self.env.action_space, gym.spaces.Box):
+            if isinstance(self.env.action_space, spaces.Box):
                 clipped_actions = np.clip(actions, self.env.action_space.low, self.env.action_space.high)
+            elif isinstance(self.env.action_space, spaces.MixedMultiDiscreteBox):
+                box_shape = self.env.action_space.box.shape[0]
+                box_actions = actions[:, -box_shape:]
+                clipped_actions = np.clip(box_actions, self.env.action_space.box.low, self.env.action_space.box.high)
+                clipped_actions = np.concatenate([actions[:, :-box_shape], clipped_actions], axis=-1)
             obs, rewards, dones, infos = self.env.step(clipped_actions)
             for info in infos:
                 maybe_ep_info = info.get('episode')

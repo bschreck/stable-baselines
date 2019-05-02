@@ -197,6 +197,11 @@ class ActorCriticPolicy(BasePolicy):
         with tf.variable_scope("output", reuse=True):
             assert self.policy is not None and self.proba_distribution is not None and self.value_fn is not None
             self.action = self.proba_distribution.sample()
+
+            # TODO: here
+            self.cat_action = self.action[:, :-1] * 0
+            self.action = tf.concat([self.cat_action, self.action[:, -1:]], axis=-1)
+
             self.deterministic_action = self.proba_distribution.mode()
             self.neglogp = self.proba_distribution.neglogp(self.action)
             if isinstance(self.proba_distribution, CategoricalProbabilityDistribution):
@@ -209,10 +214,11 @@ class ActorCriticPolicy(BasePolicy):
                 self.policy_proba = [tf.nn.softmax(categorical.flatparam())
                                      for categorical in self.proba_distribution.categoricals]
             elif isinstance(self.proba_distribution, MultiMixedProbabilityDistribution):
-                cat_policy_proba = [tf.nn.softmax(categorical.flatparam())
-                                    for categorical in self.proba_distribution.categoricals.categoricals]
+                # cat_policy_proba = [tf.nn.softmax(categorical.flatparam())
+                                    # for categorical in self.proba_distribution.categoricals.categoricals]
                 gauss_policy_proba = [self.proba_distribution.gaussian.mean, self.proba_distribution.gaussian.std]
-                self.policy_proba = cat_policy_proba + gauss_policy_proba
+                #self.policy_proba = cat_policy_proba + gauss_policy_proba
+                self.policy_proba = gauss_policy_proba
             else:
                 self.policy_proba = []  # it will return nothing, as it is not implemented
             self._value = self.value_fn[:, 0]

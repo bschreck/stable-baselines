@@ -4,7 +4,7 @@ import numpy as np
 from stable_baselines import A2C, ACER, ACKTR, DDPG, DQN, PPO1, PPO2, SAC, TRPO
 from stable_baselines.common.vec_env import DummyVecEnv
 from stable_baselines.common.identity_env import IdentityEnv, IdentityEnvBox, IdentityEnvMultiBinary, \
-    IdentityEnvMultiDiscrete
+    IdentityEnvMultiDiscrete, IdentityEnvMultiMixed
 
 
 @pytest.mark.slow
@@ -97,6 +97,31 @@ def test_identity_multi_discrete(model_class):
 
     n_trials = 100
     for env, expected_shape in [(env0, (2,)), (env1, (1, 2))]:
+        obs = env.reset()
+        for _ in range(n_trials):
+            action, _ = model.predict(obs)
+            assert np.array(action).shape == expected_shape
+            obs, _, _, _ = env.step(action)
+
+    # Free memory
+    del model, env0, env1
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize("model_class", [A2C, PPO1, PPO2, TRPO])
+def test_identity_multi_mixed(model_class):
+    """
+    test the MultiDiscrete environment vectorisation detection
+
+    :param model_class: (BaseRLModel) the RL model
+    """
+    model = model_class(policy="MlpPolicy", env=DummyVecEnv([lambda: IdentityEnvMultiMixed(10)]))
+
+    env0 = IdentityEnvMultiMixed(10)
+    env1 = DummyVecEnv([lambda: IdentityEnvMultiMixed(10)])
+
+    n_trials = 100
+    for env, expected_shape in [(env0, (3,)), (env1, (1, 3))]:
         obs = env.reset()
         for _ in range(n_trials):
             action, _ = model.predict(obs)

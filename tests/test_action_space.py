@@ -2,14 +2,16 @@ import pytest
 import numpy as np
 
 from stable_baselines import A2C, PPO1, PPO2, TRPO
-from stable_baselines.common.identity_env import IdentityEnvMultiBinary, IdentityEnvMultiDiscrete
+from stable_baselines.common.identity_env import (IdentityEnvMultiBinary,
+                                                  IdentityEnvMultiDiscrete,
+                                                  IdentityEnvMultiMixed)
 from stable_baselines.common.vec_env import DummyVecEnv
 
 MODEL_LIST = [
-    #A2C,
-    #PPO1,
+    A2C,
+    PPO1,
     PPO2,
-    #TRPO
+    TRPO
 ]
 
 
@@ -87,7 +89,7 @@ def test_identity_box(model_class):
         obs, reward, _, _ = env.step(action)
         reward_sum += reward
 
-    assert np.array(model.action_probability(obs)).shape == (2, 1, 10), \
+    assert np.array(model.action_probability(obs)).shape == (2, 1, 1), \
         "Error: action_probability not returning correct shape"
     assert np.prod(model.action_probability(obs, actions=env.action_space.sample()).shape) == 1, \
         "Error: not scalar probability"
@@ -96,7 +98,6 @@ def test_identity_box(model_class):
 @pytest.mark.slow
 @pytest.mark.parametrize("model_class", MODEL_LIST)
 def test_identity_multi_mixed(model_class):
-    from stable_baselines.common.identity_env import IdentityEnvMultiMixed
     env = DummyVecEnv([lambda: IdentityEnvMultiMixed(10)])
 
     model = model_class("MlpPolicy", env)
@@ -110,8 +111,9 @@ def test_identity_multi_mixed(model_class):
         obs, reward, _, _ = env.step(action)
         reward_sum += reward
 
-    assert (np.array(model.action_probability(obs)[:2]).shape == (2, 1, 10) and
-        model.action_probability(obs)[2].shape == (1, 1)), \
+    action_prob = model.action_probability(obs)
+    assert (np.array(action_prob[:2]).shape == (2, 1, 10) and
+            np.array(action_prob[2:]).shape == (2, 1, 1)), \
         "Error: action_probability not returning correct shape"
     assert np.prod(model.action_probability(obs, actions=env.action_space.sample()).shape) == 1, \
         "Error: not scalar probability"

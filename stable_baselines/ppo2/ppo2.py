@@ -3,7 +3,6 @@ import sys
 import multiprocessing
 from collections import deque
 
-import gym
 import numpy as np
 import tensorflow as tf
 
@@ -112,6 +111,7 @@ class PPO2(ActorCriticRLModel):
 
             self.graph = tf.Graph()
             with self.graph.as_default():
+
                 self.sess = tf_util.make_session(num_cpu=n_cpu, graph=self.graph)
 
                 n_batch_step = None
@@ -242,11 +242,16 @@ class PPO2(ActorCriticRLModel):
         else:
             update_fac = self.n_batch // self.nminibatches // self.noptepochs // self.n_steps + 1
 
+        if update == 16:
+            from tensorflow.python import debug as tf_debug
+            self.sess = tf_debug.LocalCLIDebugWrapperSession(self.sess)
+
         if writer is not None:
             # run loss backprop with summary, but once every 10 runs save the metadata (memory, compute time, ...)
             if self.full_tensorboard_log and (1 + update) % 10 == 0:
                 run_options = tf.RunOptions(trace_level=tf.RunOptions.FULL_TRACE)
                 run_metadata = tf.RunMetadata()
+
                 summary, policy_loss, value_loss, policy_entropy, approxkl, clipfrac, _ = self.sess.run(
                     [self.summary, self.pg_loss, self.vf_loss, self.entropy, self.approxkl, self.clipfrac, self._train],
                     td_map, options=run_options, run_metadata=run_metadata)
@@ -431,18 +436,12 @@ class Runner(AbstractEnvRunner):
             # Clip the actions to avoid out of bound error
             if isinstance(self.env.action_space, spaces.Box):
                 clipped_actions = np.clip(actions, self.env.action_space.low, self.env.action_space.high)
-            elif isinstance(self.env.action_space, spaces.Tuple):
-                box_shape = self.env.action_space[1].shape[0]
+            elif isinstance(self.env.action_space, spaces.MixedMultiDiscreteBox):
+                box_shape = self.env.action_space.box.shape[0]
                 box_actions = actions[:, -box_shape:]
-                clipped_actions = np.clip(box_actions, self.env.action_space[1].low, self.env.action_space[1].high)
+                clipped_actions = np.clip(box_actions, self.env.action_space.box.low, self.env.action_space.box.high)
                 clipped_actions = np.concatenate([actions[:, :-box_shape], clipped_actions], axis=-1)
             self.obs[:], rewards, self.dones, infos = self.env.step(clipped_actions)
-            # import pdb; pdb.set_trace()
-            # if isinstance(env.observation_space.Tuple):
-                # for i, o in enumerate(new_obs):
-                    # self.obs[i][:] = o
-            # else:
-            # self.obs[:] = obs
             for info in infos:
                 maybe_ep_info = info.get('episode')
                 if maybe_ep_info is not None:

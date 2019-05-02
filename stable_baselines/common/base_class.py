@@ -426,7 +426,7 @@ class BaseRLModel(ABC):
                                  "environment, please use ({},) or ".format(observation_space.n) +
                                  "(n_env, {}) for the observation shape.".format(observation_space.n))
         elif isinstance(observation_space, spaces.MixedMultiDiscreteBox):
-            if observation.shape == observation_space.shape[0]:
+            if observation.shape == observation_space.shape:
                 return False
             elif len(observation.shape) == 2 and observation.shape[1] == observation_space.shape[0]:
                 return True
